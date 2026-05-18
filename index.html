@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>우리 동네 체육시설 지도</title>
+    <style>
+        /* 기본 스타일 리셋 */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Malgun Gothic', dotum, sans-serif; }
+        body, html { height: 100%; overflow: hidden; }
+        
+        /* 왼쪽 리스트, 오른쪽 지도의 2분할 레이아웃 */
+        .container { display: flex; height: 100%; width: 100%; }
+        
+        /* 사이드바 스타일 */
+        .sidebar { width: 350px; height: 100%; background: #ffffff; box-shadow: 2px 0 5px rgba(0,0,0,0.1); display: flex; flex-direction: column; z-index: 10; }
+        .header { padding: 20px; background: #2c3e50; color: #fff; }
+        .header h1 { font-size: 18px; margin-bottom: 5px; }
+        .header p { font-size: 12px; opacity: 0.8; }
+        
+        /* 탭 버튼 스타일 */
+        .tabs { display: flex; background: #ecf0f1; border-bottom: 1px solid #bdc3c7; }
+        .tab-btn { flex: 1; padding: 12px; text-align: center; background: none; border: none; font-size: 14px; font-weight: bold; color: #7f8c8d; cursor: pointer; transition: all 0.3s; }
+        .tab-btn.active { background: #fff; color: #2c3e50; border-bottom: 3px solid #3498db; }
+        
+        /* 검색 결과 리스트 스타일 */
+        .list-container { flex: 1; overflow-y: auto; padding: 10px; }
+        .place-item { padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s; }
+        .place-item:hover { background: #f9f9f9; }
+        .place-item h3 { font-size: 15px; color: #333; margin-bottom: 5px; }
+        .place-item p { font-size: 12px; color: #666; line-height: 1.4; }
+        .place-item .phone { color: #3498db; font-size: 11px; margin-top: 4px; }
+        
+        /* 지도 영역 스타일 */
+        .map-container { flex: 1; height: 100%; position: relative; }
+        #map { width: 100%; height: 100%; }
+        
+        /* 마커 클릭 시 뜨는 상세 팝업 스타일 */
+        .info-window { padding: 10px; font-size: 13px; line-height: 1.4; min-width: 160px; }
+        .info-window b { color: #2c3e50; display: block; margin-bottom: 4px; }
+        .info-window a { display: inline-block; margin-top: 5px; color: #3498db; text-decoration: none; font-size: 11px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="sidebar">
+        <div class="header">
+            <h1>우리 동네 체육시설 지도 👟</h1>
+            <p>공공 및 민간 체육시설을 한눈에 확인해보세요!</p>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('public')">공공체육시설</button>
+            <button class="tab-btn" onclick="switchTab('private')">민간체육시설</button>
+        </div>
+        
+        <div class="list-container" id="placesList">
+            <div style="padding:20px; text-align:center; color:#999; font-size:13px;">지도를 로드 중입니다...</div>
+        </div>
+    </div>
+
+    <div class="map-container">
+        <div id="map"></div>
+    </div>
+</div>
+
+<script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=YOUR_KAKAO_JAVASCRIPT_KEY&libraries=services"></script>
+
+<script>
+    var map;
+    var ps;
+    var infowindow;
+    var markers = [];
+    var currentTab = 'public';
+    var userLatitude = 37.6584; // 기본값 (고양시청 부근 주소)
+    var userLongitude = 126.8320;
+
+    // 페이지가 열리면 바로 실행되는 함수
+    window.onload = function() {
+        // 브라우저에 위치 정보 권한 요청하기
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                userLatitude = position.coords.latitude;
+                userLongitude = position.coords.longitude;
+                initMap(); // 위치 받기 성공 시 지도 띄우기
+            }, function(error) {
+                console.log("위치 권한 거부 또는 오류로 기본 위치를 사용합니다.");
+                initMap(); // 실패 시 기본 고양시 위치로 지도 띄우기
+            });
+        } else {
+            initMap();
+        }
+    };
+
+    // 지도 생성 및 설정 함수
+    function initMap() {
+        var mapContainer = document.getElementById('map');
+        var mapOption = {
+            center: new kakao.maps.LatLng(userLatitude, userLongitude), // 내 위치 중심
+            level: 5 // 지도 확대 레벨 (5)
+        };
+
+        map = new kakao.maps.Map(mapContainer, mapOption); // 지도 그리기
+        ps = new kakao.maps.services.Places(); // 카카오 검색 서비스 객체
+        infowindow = new kakao.maps.InfoWindow({ zIndex: 1 }); // 팝업창 객체
+
+        // 첫 시작 시 '공공체육시설' 자동 검색
+        searchPlaces();
+    }
+
+    // 탭을 클릭했을 때 작동하는 함수
+    function switchTab(tabType) {
+        currentTab = tabType;
+        
+        var buttons = document.querySelectorAll('.tab-btn');
+        buttons[0].classList.toggle('active', tabType === 'public');
+        buttons[1].classList.toggle('active', tabType === 'private');
+
+        searchPlaces(); // 탭에 맞는 새로운 검색 실행
+    }
+
+    // 실제로 카카오 서버에 장소를 검색 요청하는 함수
+    function searchPlaces() {
+        clearMarkers(); // 이전 마커들 싹 지우기
+        document.getElementById('placesList').innerHTML = '<div style="padding:20px; text-align:center; color:#999; font-size:13px;">검색 중입니다...</div>';
+
+        var center = map.getCenter(); // 현재 보고 있는 지도 중심점 기준
+
+        if (currentTab === 'public') {
+            // 공공기관(PO3) 카테고리 중에서 '체육' 관련 키워드 검색
+            ps.keywordSearch('체육시설', placesSearchCB, {
+                category_group_code: 'PO3',
+                location: center,
+                radius: 4000 // 중심점 기준 반경 4km 내
+            });
+        } else if (currentTab === 'private') {
+            // 민간시설: 주변의 헬스장, 필라테스, 요가 검색
+            ps.keywordSearch('헬스장 필라테스 요가', placesSearchCB, {
+                location: center,
+                radius: 3000 // 중심점 기준 반경 3km 내
+            });
+        }
+    }
+
+    // 검색이 끝나면 결과를 받아오는 콜백함수
+    function placesSearchCB(data, status, pagination) {
+        if (status === kakao.maps.services.Status.OK) {
+            displayPlaces(data); // 결과가 있으면 화면에 그리기
+        } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+            document.getElementById('placesList').innerHTML = '<div style="padding:20px; text-align:center; color:#999; font-size:13px;">주변에 검색 결과가 없습니다. 지도를 움직여보세요!</div>';
+        }
+    }
+
+    // 마커 찍고 왼쪽 리스트에 글씨 추가하는 함수
+    function displayPlaces(places) {
+        var listEl = document.getElementById('placesList');
+        listEl.innerHTML = ''; // 이전 글씨 지우기
+        
+        var bounds = new kakao.maps.LatLngBounds();
+
+        // 🎨 카테고리별 다른 마커 디자인 설정
+        // 공공시설은 카카오 기본 '파란색 마커', 민간시설은 다음의 '빨간색 마커' 이미지 사용
+        var privateMarkerSrc = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png'; 
+        var imageSize = new kakao.maps.Size(31, 35);
+        var markerImage = new kakao.maps.MarkerImage(privateMarkerSrc, imageSize);
+
+        for (var i = 0; i < places.length; i++) {
+            var place = places[i];
+            var placePosition = new kakao.maps.LatLng(place.y, place.x);
+            
+            var markerOptions = {
+                position: placePosition,
+                map: map
+            };
+            
+            // 민간체육시설일 때만 마커 이미지를 빨간색으로 교체
+            if (currentTab === 'private') {
+                markerOptions.image = markerImage;
+            }
+
+            var marker = new kakao.maps.Marker(markerOptions);
+            markers.push(marker); // 추후 삭제를 위해 배열에 저장
+
+            // 왼쪽 리스트 아이템 생성
+            var itemEl = document.createElement('div');
+            itemEl.className = 'place-item';
+            
+            var contentStr = '<h3>' + place.place_name + '</h3>';
+            contentStr += '<p>' + (place.road_address_name ? place.road_address_name : place.address_name) + '</p>';
+            if (place.phone) contentStr += '<p class="phone">' + place.phone + '</p>';
+            
+            itemEl.innerHTML = contentStr;
+            listEl.appendChild(itemEl);
+
+            bounds.extend(placePosition);
+
+            // 마커나 리스트를 클릭했을 때 팝업 열기 연동
+            (function(marker, place) {
+                kakao.maps.event.addListener(marker, 'click', function() {
+                    displayInfoWindow(marker, place);
+                });
+                
+                itemEl.onclick = function() {
+                    displayInfoWindow(marker, place);
+                    map.panTo(marker.getPosition()); // 클릭한 곳으로 지도 중심 부드럽게 이동
+                };
+            })(marker, place);
+        }
+        
+        // 검색된 모든 마커가 화면에 다 들어오도록 지도 범위 재조정
+        map.setBounds(bounds);
+    }
+
+    // 💬 마커 클릭 시 나타날 상세 팝업창(인포윈도우) 디자인 함수
+    function displayInfoWindow(marker, place) {
+        var content = '<div class="info-window">' +
+                      '<b>' + place.place_name + '</b>' +
+                      (place.road_address_name ? place.road_address_name : place.address_name) + '<br>' +
+                      (place.phone ? '<span style="color:#3498db;">' + place.phone + '</span><br>' : '') +
+                      '<a href="' + place.place_url + '" target="_blank">카카오맵 상세 정보 ↗</a>' +
+                      '</div>';
+        
+        infowindow.setContent(content);
+        infowindow.open(map, marker);
+    }
+
+    // 새로운 탭 누를 때 기존 마커를 지도에서 다 지워주는 함수
+    function clearMarkers() {
+        for (var i = 0; i < markers.length; i++) {
+            markers[i].setMap(null);
+        }
+        markers = [];
+        infowindow.close();
+    }
+</script>
+</body>
+</html>
